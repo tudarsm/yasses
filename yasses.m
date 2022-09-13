@@ -45,7 +45,7 @@ polstar = polartrans(star,supsample_r*rmax,supsample_theta*nspokes,cx,cy,'linear
 % intensity in the given frame anyway.
 % the resulting 36 (half of nspokes) frames are averaged (dimension 3)
 linepairs = reshape(polstar,size(polstar,1),[],nspokes/2);
-linepair = mean(linepairs,3);
+linepair = mean(linepairs,3,'omitnan');
 
 % now derive the contrast (I_max-I_min)/(I_max+I_min) for every radius
 I_max = max(linepair,[],2);
@@ -252,6 +252,11 @@ function [lpmm,mtf] = createMTFfromPSF(x,psf)
 % MTF is FFT of PSF
 % actually, this is the same as createPSFfromMTF with the difference that
 % FFT is used instead of iFFT
+if all(x>=0)
+    x = [fliplr(-x(2:end)),x];
+    psf = [fliplr(psf(2:end)),psf];
+end
+
 n = 2^19;
 Y = fftshift(fft(psf,n));
 Fs = 1/mean(diff(x));
@@ -279,7 +284,7 @@ posxlpmm = xlpmm(idx:end);
 FWHM = 2*interp1(righthalf(idx),posxlpmm(idx),0.5);
 end
 
-function mtf_filled=extrapolateLowLPMM(lpmm,mtf,method)
+function [mtf_filled,mtf_scaled,fobj]=extrapolateLowLPMM(lpmm,mtf,method)
 
 % if method == gaussian, fit a gaussian to the data
 if strcmp(method,'gaussian')
@@ -288,13 +293,30 @@ if strcmp(method,'gaussian')
     % gaussian that is centered at 0
     fobj = fit(x(:),y(:),'gauss1','Lower',[0,0,0],'Upper',[Inf,0,Inf]);
     mtf_filled = fobj(lpmm)'; % transpose to be again of same dimensions
+elseif strcmp(method,'gaussian2')
+    x=lpmm(~isnan(mtf));
+    y=mtf(~isnan(mtf));
+    % gaussian that is centered at 0
+    fobj = fit(x(:),y(:),'gauss2','Lower',[0,0,0,0,0,0],'Upper',[Inf,0,Inf,Inf,0,Inf]);
+    mtf_filled = fobj(lpmm)'; % transpose to be again of same dimensions
+elseif strcmp(method,'lorentzian')
+    x=lpmm(~isnan(mtf));
+    y=mtf(~isnan(mtf));
+    % gaussian that is centered at 0
+    eqn = 'a/(x^2+a^2)*b';
+    fobj = fit(x(:),y(:),eqn,'Lower',[0,0],'Upper',[Inf,Inf]);
+    mtf_filled = fobj(lpmm)'; % transpose to be again of same dimensions
 else
     % use fillmissing
     mtf_filled = fillmissing(mtf,method)';
+    fobj=[];
 end
 % renormalize! this is important because if low lpmm values are not
 % available, DC contrast is probably overestimated.
 mtf_filled = mtf_filled/max(mtf_filled);
+% scale the original mtf to fit the curve
+notnanidx = find(~isnan(mtf));
+mtf_scaled = mtf/mtf(notnanidx(1))*mtf_filled(notnanidx(1));
 end
 
 function kernel = create2DPSFfromFWHM(imsize,fwhm,pxsize,magnification)
@@ -332,4 +354,8 @@ kernel = imresize(kernel,[imsize(1),imsize(2)],'bicubic');
 % normalize to the peak
 kernel = kernel./max(kernel(:));
 
+end
+
+function g = gaussian(x,pos,wid)
+g = exp(-((x-pos)./(0.6006.*wid)) .^2);
 end
